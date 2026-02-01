@@ -28,19 +28,47 @@ import type {
 let supabaseClient: any = null;
 let isSupabaseReady = false;
 
-// Check env vars - safely access import.meta.env
-const getEnvVar = (key: string): string => {
+// Check env vars - supporta vari formati (VITE_, NEXT_PUBLIC_, SUPABASE_)
+const getEnvVar = (keys: string[]): string => {
   try {
     // @ts-ignore - import.meta.env is provided by Vite
-    return import.meta.env?.[key] || '';
+    const env = import.meta.env || {};
+    for (const key of keys) {
+      if (env[key]) return env[key];
+    }
+    return '';
   } catch {
     return '';
   }
 };
 
-const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
-const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
+// Prova vari nomi di variabili in ordine di priorità
+const supabaseUrl = getEnvVar([
+  'VITE_SUPABASE_URL',
+  'NEXT_PUBLIC_SUPABASE_URL', 
+  'SUPABASE_URL'
+]);
+
+const supabaseAnonKey = getEnvVar([
+  'VITE_SUPABASE_ANON_KEY',
+  'VITE_SUPABASESUPABASE_ANON_KEY', // typo nel tuo env
+  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+  'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+  'VITE_SUPABASE_PUBLISHABLE_KEY',
+  'VITE_SUPABASESUPABASE_PUBLISHABLE_KEY', // typo nel tuo env
+  'SUPABASE_ANON_KEY'
+]);
+
 const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey);
+
+// Debug (rimuovi in produzione)
+if (import.meta.env?.DEV) {
+  console.log('[Supabase Config]', { 
+    url: supabaseUrl ? '***set***' : '***missing***', 
+    key: supabaseAnonKey ? '***set***' : '***missing***',
+    active: hasSupabaseConfig 
+  });
+}
 
 // Initialize Supabase client if possible
 const initSupabase = async () => {

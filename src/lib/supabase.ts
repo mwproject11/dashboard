@@ -6,19 +6,37 @@
  * esporta valori null che attivano il fallback a localStorage
  */
 
-// Check if we're in a browser environment with import.meta.env
-const getEnv = (key: string): string => {
+// Check env vars - supporta vari formati (VITE_, NEXT_PUBLIC_, SUPABASE_)
+const getEnvVar = (keys: string[]): string => {
   try {
     // @ts-ignore - import.meta.env is provided by Vite
-    return import.meta.env?.[key] || '';
+    const env = import.meta.env || {};
+    for (const key of keys) {
+      if (env[key]) return env[key];
+    }
+    return '';
   } catch {
     return '';
   }
 };
 
-// Check if Supabase env vars are set
-const supabaseUrl = getEnv('VITE_SUPABASE_URL');
-const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY');
+// Prova vari nomi di variabili in ordine di priorità
+const supabaseUrl = getEnvVar([
+  'VITE_SUPABASE_URL',
+  'NEXT_PUBLIC_SUPABASE_URL', 
+  'SUPABASE_URL'
+]);
+
+const supabaseAnonKey = getEnvVar([
+  'VITE_SUPABASE_ANON_KEY',
+  'VITE_SUPABASESUPABASE_ANON_KEY', // typo nel tuo env
+  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+  'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+  'VITE_SUPABASE_PUBLISHABLE_KEY',
+  'VITE_SUPABASESUPABASE_PUBLISHABLE_KEY', // typo nel tuo env
+  'SUPABASE_ANON_KEY'
+]);
+
 const hasCredentials = Boolean(supabaseUrl && supabaseAnonKey);
 
 /**
@@ -67,6 +85,8 @@ export const getSupabaseStatus = () => ({
   configured: hasCredentials,
   url: supabaseUrl ? '***set***' : '***missing***',
   key: supabaseAnonKey ? '***set***' : '***missing***',
+  urlSource: supabaseUrl ? 'found' : 'not-found',
+  keySource: supabaseAnonKey ? 'found' : 'not-found',
 });
 
 // Export sync placeholder (will be null until getSupabase is called)

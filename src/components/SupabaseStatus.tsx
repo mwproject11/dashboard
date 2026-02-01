@@ -13,15 +13,31 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-// Check if Supabase is configured
-const isSupabaseConfigured = (): boolean => {
+// Check env vars - supporta vari formati
+const getEnvVar = (keys: string[]): string => {
   try {
-    const url = import.meta.env?.VITE_SUPABASE_URL;
-    const key = import.meta.env?.VITE_SUPABASE_ANON_KEY;
-    return Boolean(url && key);
+    const env = (import.meta as any).env || {};
+    for (const key of keys) {
+      if (env[key]) return env[key];
+    }
+    return '';
   } catch {
-    return false;
+    return '';
   }
+};
+
+const isSupabaseConfigured = (): boolean => {
+  const url = getEnvVar(['VITE_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_URL']);
+  const key = getEnvVar([
+    'VITE_SUPABASE_ANON_KEY',
+    'VITE_SUPABASESUPABASE_ANON_KEY',
+    'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+    'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    'VITE_SUPABASESUPABASE_PUBLISHABLE_KEY',
+    'SUPABASE_ANON_KEY'
+  ]);
+  return Boolean(url && key);
 };
 
 export function SupabaseStatus() {
