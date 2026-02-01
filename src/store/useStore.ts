@@ -1,3 +1,35 @@
+/**
+ * @deprecated Questo file è mantenuto per retrocompatibilità.
+ * Usa `import { ... } from '@/store'` per nuovo codice.
+ * 
+ * Gli store sono stati migrati a Supabase.
+ * Se Supabase non è configurato, fanno automaticamente fallback a localStorage.
+ */
+
+// Re-export tutti gli store dal nuovo file Supabase
+export {
+  useUsersStore,
+  useAuthStore,
+  useArticlesStore,
+  useChatStore,
+  useTodoStore,
+  useThemeStore,
+  useUIStore,
+} from './useSupabaseStore';
+
+// Re-export notification store
+export { useNotificationStore } from './useNotificationStore';
+
+// Re-export types
+export type { User } from '@/types';
+
+// ============================================
+// LEGACY IMPLEMENTATION (mantenuta per riferimento)
+// ============================================
+// Il codice seguente è stato migrato a useSupabaseStore.ts
+// e mantiene la stessa API per retrocompatibilità.
+
+// Importa implementazione legacy solo se necessario
 import { create } from 'zustand';
 import CONFIG from '@/config';
 import db from '@/lib/database';
@@ -13,9 +45,6 @@ import type {
   Session,
   LoginCredentials
 } from '@/types';
-
-// Re-export for use in other components
-export type { User };
 
 // ============================================
 // USERS STORE - Gestione utenti persistente
