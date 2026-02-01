@@ -192,30 +192,53 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
       return { success: true, user: newUser };
     }
 
-    // Supabase mode
+    // Supabase mode - signup senza trigger
+    console.log('[Supabase] Attempting signup for:', userData.email);
+    
+    // 1. Crea utente in auth.users
     const { data: authData, error: authError } = await supabaseClient.auth.signUp({
       email: userData.email,
-      password: password,
-      options: {
-        data: {
-          username: userData.username,
-          nome: userData.nome,
-          cognome: userData.cognome,
-          ruolo: userData.ruolo
-        }
-      }
+      password: password
+    });
+
+    console.log('[Supabase] Auth signup result:', { 
+      success: !!authData?.user, 
+      error: authError?.message,
+      userId: authData?.user?.id 
     });
 
     if (authError || !authData.user) {
+      console.error('[Supabase] Signup failed:', authError);
       return { success: false, error: authError?.message || 'Errore creazione utente' };
     }
 
+    // 2. Crea utente in public.users MANUALMENTE (senza trigger)
     const newUser: User = {
       ...userData,
       id: authData.user.id,
       createdAt: new Date().toISOString(),
       isActive: true
     };
+
+    console.log('[Supabase] Inserting into public.users:', newUser);
+    
+    const { error: profileError } = await supabaseClient
+      .from('users')
+      .insert({
+        id: newUser.id,
+        username: userData.username,
+        email: userData.email,
+        nome: userData.nome,
+        cognome: userData.cognome,
+        ruolo: userData.ruolo || 'scrittore',
+        is_active: true,
+        created_at: newUser.createdAt
+      });
+
+    if (profileError) {
+      console.error('[Supabase] Failed to create profile:', profileError);
+      // Non blocchiamo, l'utente auth esiste già
+    }
 
     set({ users: [...users, newUser] });
     return { success: true, user: newUser };
