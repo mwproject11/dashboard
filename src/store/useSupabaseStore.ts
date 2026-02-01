@@ -342,6 +342,8 @@ interface UsersState {
   getUserByUsername: (username: string) => User | undefined;
   getUserById: (id: string) => User | undefined;
   getUserByEmail: (email: string) => User | undefined;
+  activateUser: (id: string) => Promise<void>;
+  deactivateUser: (id: string) => Promise<void>;
 }
 
 export const useUsersStore = create<UsersState>()((set, get) => ({
@@ -513,6 +515,14 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
 
   getUserByEmail: (email) => {
     return get().users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  },
+
+  activateUser: async (id) => {
+    await get().updateUser(id, { isActive: true });
+  },
+
+  deactivateUser: async (id) => {
+    await get().updateUser(id, { isActive: false });
   }
 }));
 
