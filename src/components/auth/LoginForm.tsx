@@ -85,7 +85,7 @@ export function LoginForm() {
       email: regData.email,
       nome: regData.nome,
       cognome: regData.cognome,
-      ruolo: 'scrittore'
+      ruolo: 'admin'
     }, regData.password);
 
     if (result.success) {
