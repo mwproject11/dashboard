@@ -15,7 +15,6 @@ export {
   useArticlesStore,
   useChatStore,
   useTodoStore,
-  useNotificationsStore,
   useThemeStore,
   useUIStore,
   
@@ -25,13 +24,11 @@ export {
   useArticlesStore as useSupabaseArticlesStore,
   useChatStore as useSupabaseChatStore,
   useTodoStore as useSupabaseTodoStore,
-  useNotificationsStore as useSupabaseNotificationsStore,
   useThemeStore as useSupabaseThemeStore,
   useUIStore as useSupabaseUIStore,
 } from './useSupabaseStore';
 
-// Re-export vecchi store per retrocompatibilità (verranno rimossi in futuro)
-// Questi import mantengono il codice esistente funzionante
+// Notification store (rimane separato)
 export { useNotificationStore } from './useNotificationStore';
 
 // Nota: useStore.ts originale è ancora disponibile per retrocompatibilità
