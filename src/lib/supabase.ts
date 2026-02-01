@@ -15,59 +15,60 @@ const getEnv = (key: string): string => {
   }
 };
 
-// Dynamic import to avoid errors if package is not installed
-let supabaseClient: any = null;
-let isConfigured = false;
-
-try {
-  // Only try to load if env vars are set
-  const supabaseUrl = getEnv('VITE_SUPABASE_URL');
-  const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY');
-  
-  if (supabaseUrl && supabaseAnonKey) {
-    // Try to load the module
-    const supabaseModule = require('@supabase/supabase-js');
-    
-    if (supabaseModule && supabaseModule.createClient) {
-      supabaseClient = supabaseModule.createClient(supabaseUrl, supabaseAnonKey, {
-        auth: {
-          autoRefreshToken: true,
-          persistSession: true,
-          detectSessionInUrl: true,
-          storageKey: 'mw_mgr_supabase_auth',
-        },
-        realtime: {
-          params: {
-            eventsPerSecond: 10,
-          },
-        },
-      });
-      isConfigured = true;
-    }
-  }
-} catch {
-  // Supabase not installed or not configured
-  supabaseClient = null;
-  isConfigured = false;
-}
+// Check if Supabase env vars are set
+const supabaseUrl = getEnv('VITE_SUPABASE_URL');
+const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY');
+const hasCredentials = Boolean(supabaseUrl && supabaseAnonKey);
 
 /**
  * Client Supabase (null se non configurato)
+ * Usa lazy initialization per evitare errori se il pacchetto non è installato
  */
-export const supabase = supabaseClient;
+let supabaseClient: any = null;
+
+/**
+ * Ottieni il client Supabase (inizializza al primo uso)
+ */
+export const getSupabase = async () => {
+  if (!hasCredentials) return null;
+  if (supabaseClient) return supabaseClient;
+  
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+        storageKey: 'mw_mgr_supabase_auth',
+      },
+      realtime: {
+        params: {
+          eventsPerSecond: 10,
+        },
+      },
+    });
+    return supabaseClient;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Verifica se Supabase è configurato
  */
-export const isSupabaseConfigured = (): boolean => isConfigured;
+export const isSupabaseConfigured = (): boolean => hasCredentials;
 
 /**
  * Helper per ottenere lo stato di configurazione
  */
 export const getSupabaseStatus = () => ({
-  configured: isConfigured,
-  url: getEnv('VITE_SUPABASE_URL') ? '***set***' : '***missing***',
-  key: getEnv('VITE_SUPABASE_ANON_KEY') ? '***set***' : '***missing***',
+  configured: hasCredentials,
+  url: supabaseUrl ? '***set***' : '***missing***',
+  key: supabaseAnonKey ? '***set***' : '***missing***',
 });
+
+// Export sync placeholder (will be null until getSupabase is called)
+export const supabase: any = null;
 
 export default supabase;
