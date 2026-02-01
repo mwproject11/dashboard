@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Newspaper, Eye, EyeOff, Lock, User, Sparkles, UserPlus } from 'lucide-react';
 import { validatePassword } from '@/lib/crypto';
 
@@ -85,7 +85,7 @@ export function LoginForm() {
       email: regData.email,
       nome: regData.nome,
       cognome: regData.cognome,
-      ruolo: 'admin'
+      ruolo: 'scrittore'
     }, regData.password);
 
     if (result.success) {
@@ -129,10 +129,10 @@ export function LoginForm() {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="login" className="w-full">
-            <TabsList className="grid w-full grid-cols-2 mb-4">
+            {/*<TabsList className="grid w-full grid-cols-2 mb-4">
               <TabsTrigger value="login">Accedi</TabsTrigger>
               <TabsTrigger value="register">Registrati</TabsTrigger>
-            </TabsList>
+            </TabsList>*/}
 
             {/* LOGIN TAB */}
             <TabsContent value="login">
