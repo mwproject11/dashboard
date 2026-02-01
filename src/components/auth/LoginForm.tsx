@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent} from '@/components/ui/tabs';
 import { Newspaper, Eye, EyeOff, Lock, User, Sparkles, UserPlus } from 'lucide-react';
 import { validatePassword } from '@/lib/crypto';
 
