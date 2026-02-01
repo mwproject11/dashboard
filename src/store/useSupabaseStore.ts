@@ -1,13 +1,10 @@
 /**
- * Supabase Store - Sostituisce localStorage con backend persistente
+ * Supabase Store - Backend persistente con Supabase
  * 
- * Questo store utilizza Supabase per:
- * - Autenticazione (sostituisce il sistema custom di hash password)
- * - Database PostgreSQL per dati persistenti
- * - Realtime per chat e notifiche
- * - Row Level Security per protezione dati
- * 
- * Se Supabase non è configurato, fa fallback a localStorage
+ * Architettura:
+ * - Auth: Supabase Auth (gestisce sessioni JWT automaticamente)
+ * - Database: PostgreSQL via Supabase
+ * - Fallback: localStorage se Supabase non configurato
  */
 
 import { create } from 'zustand';
@@ -23,15 +20,11 @@ import type {
 } from '@/types';
 
 // ============================================
-// SUPABASE CLIENT (lazy initialization)
+// CONFIGURAZIONE SUPABASE
 // ============================================
-let supabaseClient: any = null;
-let isSupabaseReady = false;
-
-// Check env vars - supporta vari formati (VITE_, NEXT_PUBLIC_, SUPABASE_)
 const getEnvVar = (keys: string[]): string => {
   try {
-    // @ts-ignore - import.meta.env is provided by Vite
+    // @ts-ignore
     const env = import.meta.env || {};
     for (const key of keys) {
       if (env[key]) return env[key];
@@ -42,7 +35,6 @@ const getEnvVar = (keys: string[]): string => {
   }
 };
 
-// Prova vari nomi di variabili in ordine di priorità
 const supabaseUrl = getEnvVar([
   'VITE_SUPABASE_URL',
   'NEXT_PUBLIC_SUPABASE_URL', 
@@ -51,29 +43,23 @@ const supabaseUrl = getEnvVar([
 
 const supabaseAnonKey = getEnvVar([
   'VITE_SUPABASE_ANON_KEY',
-  'VITE_SUPABASESUPABASE_ANON_KEY', // typo nel tuo env
+  'VITE_SUPABASESUPABASE_ANON_KEY',
   'NEXT_PUBLIC_SUPABASE_ANON_KEY',
   'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
   'VITE_SUPABASE_PUBLISHABLE_KEY',
-  'VITE_SUPABASESUPABASE_PUBLISHABLE_KEY', // typo nel tuo env
-  'SUPABASE_ANON_KEY'
+  'VITE_SUPABASESUPABASE_PUBLISHABLE_KEY',
+  'SUPABASE_ANON_KEY',
+  'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'
 ]);
 
 const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey);
 
-// Debug (rimuovi in produzione)
-if (import.meta.env?.DEV) {
-  console.log('[Supabase Config]', { 
-    url: supabaseUrl ? '***set***' : '***missing***', 
-    key: supabaseAnonKey ? '***set***' : '***missing***',
-    active: hasSupabaseConfig 
-  });
-}
+// Lazy load del client Supabase
+let supabaseClient: any = null;
+let isSupabaseReady = false;
 
-// Initialize Supabase client if possible
 const initSupabase = async () => {
   if (!hasSupabaseConfig || supabaseClient) return;
-  
   try {
     const { createClient } = await import('@supabase/supabase-js');
     supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
@@ -83,9 +69,6 @@ const initSupabase = async () => {
         detectSessionInUrl: true,
         storageKey: 'mw_mgr_supabase_auth',
       },
-      realtime: {
-        params: { eventsPerSecond: 10 },
-      },
     });
     isSupabaseReady = true;
   } catch {
@@ -94,13 +77,256 @@ const initSupabase = async () => {
   }
 };
 
-// Try to init immediately (non-blocking)
 if (hasSupabaseConfig) {
   initSupabase();
 }
 
-// Helper to check if we should use Supabase
 const useSupabase = () => hasSupabaseConfig && isSupabaseReady && supabaseClient !== null;
+
+// ============================================
+// AUTH STORE
+// ============================================
+interface AuthState {
+  user: User | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  
+  // Actions
+  login: (credentials: { username: string; password: string }) => Promise<{ success: boolean; error?: string }>;
+  logout: () => Promise<void>;
+  checkSession: () => Promise<boolean>;
+  changePassword: (userId: string, oldPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  resetPassword: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
+}
+
+export const useAuthStore = create<AuthState>()((set, get) => ({
+  user: null,
+  isAuthenticated: false,
+  isLoading: false,
+
+  login: async (credentials) => {
+    set({ isLoading: true });
+
+    // MODALITA LOCALSTORAGE (fallback)
+    if (!useSupabase()) {
+      const users = db.get<User[]>(CONFIG.STORAGE_KEYS.USERS, []) || [];
+      const user = users.find(u => u.username.toLowerCase() === credentials.username.toLowerCase());
+      
+      if (!user) {
+        set({ isLoading: false });
+        return { success: false, error: 'Utente non trovato' };
+      }
+
+      if (!user.isActive) {
+        set({ isLoading: false });
+        return { success: false, error: 'Account disattivato' };
+      }
+
+      const passwords = db.get<Record<string, string>>(CONFIG.STORAGE_KEYS.USERS + '_pwd', {}) || {};
+      const storedHash = passwords[user.id];
+      
+      if (!storedHash) {
+        set({ isLoading: false });
+        return { success: false, error: 'Password non impostata' };
+      }
+
+      const { verifyPassword } = await import('@/lib/crypto');
+      const isValid = await verifyPassword(credentials.password, storedHash);
+      
+      if (!isValid) {
+        set({ isLoading: false });
+        return { success: false, error: 'Password non corretta' };
+      }
+
+      // Aggiorna last login
+      const updatedUsers = users.map(u => 
+        u.id === user.id ? { ...u, lastLogin: new Date().toISOString() } : u
+      );
+      db.set(CONFIG.STORAGE_KEYS.USERS, updatedUsers);
+
+      // Salva sessione
+      const session = {
+        userId: user.id,
+        token: crypto.randomUUID(),
+        expiresAt: Date.now() + CONFIG.SECURITY.SESSION_TIMEOUT
+      };
+      db.set(CONFIG.STORAGE_KEYS.AUTH, session);
+
+      set({ user, isAuthenticated: true, isLoading: false });
+      return { success: true };
+    }
+
+    // MODALITA SUPABASE
+    try {
+      // 1. Trova l'utente per username per ottenere l'email
+      const { data: userData, error: userError } = await supabaseClient
+        .from('users')
+        .select('*')
+        .eq('username', credentials.username)
+        .single();
+
+      if (userError || !userData) {
+        set({ isLoading: false });
+        return { success: false, error: 'Utente non trovato' };
+      }
+
+      if (!userData.is_active) {
+        set({ isLoading: false });
+        return { success: false, error: 'Account disattivato' };
+      }
+
+      // 2. Login con Supabase Auth usando email
+      const { data: authData, error: authError } = await supabaseClient.auth.signInWithPassword({
+        email: userData.email,
+        password: credentials.password
+      });
+
+      if (authError || !authData.user) {
+        set({ isLoading: false });
+        return { success: false, error: authError?.message || 'Password non corretta' };
+      }
+
+      // 3. Aggiorna last_login nel database
+      await supabaseClient
+        .from('users')
+        .update({ last_login: new Date().toISOString() })
+        .eq('id', userData.id);
+
+      // 4. Costruisci oggetto User
+      const user: User = {
+        id: userData.id,
+        username: userData.username,
+        email: userData.email,
+        nome: userData.nome,
+        cognome: userData.cognome,
+        ruolo: userData.ruolo,
+        avatar: userData.avatar || undefined,
+        createdAt: userData.created_at,
+        lastLogin: new Date().toISOString(),
+        isActive: userData.is_active
+      };
+
+      set({ user, isAuthenticated: true, isLoading: false });
+      return { success: true };
+
+    } catch (error) {
+      console.error('[Login Error]', error);
+      set({ isLoading: false });
+      return { success: false, error: 'Errore durante il login' };
+    }
+  },
+
+  logout: async () => {
+    if (useSupabase()) {
+      await supabaseClient.auth.signOut();
+    } else {
+      db.remove(CONFIG.STORAGE_KEYS.AUTH);
+    }
+    set({ user: null, isAuthenticated: false });
+  },
+
+  checkSession: async () => {
+    // LOCALSTORAGE FALLBACK
+    if (!useSupabase()) {
+      const session = db.get<{ userId: string; token: string; expiresAt: number }>(CONFIG.STORAGE_KEYS.AUTH, null);
+      if (!session) return false;
+      if (Date.now() > session.expiresAt) {
+        get().logout();
+        return false;
+      }
+
+      const users = db.get<User[]>(CONFIG.STORAGE_KEYS.USERS, []) || [];
+      const user = users.find(u => u.id === session.userId);
+      if (!user || !user.isActive) {
+        get().logout();
+        return false;
+      }
+
+      set({ user, isAuthenticated: true });
+      return true;
+    }
+
+    // SUPABASE
+    try {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (!session) {
+        set({ user: null, isAuthenticated: false });
+        return false;
+      }
+
+      // Recupera dati utente da public.users
+      const { data: userData, error } = await supabaseClient
+        .from('users')
+        .select('*')
+        .eq('id', session.user.id)
+        .single();
+
+      if (error || !userData || !userData.is_active) {
+        await supabaseClient.auth.signOut();
+        set({ user: null, isAuthenticated: false });
+        return false;
+      }
+
+      const user: User = {
+        id: userData.id,
+        username: userData.username,
+        email: userData.email,
+        nome: userData.nome,
+        cognome: userData.cognome,
+        ruolo: userData.ruolo,
+        avatar: userData.avatar || undefined,
+        createdAt: userData.created_at,
+        lastLogin: userData.last_login || undefined,
+        isActive: userData.is_active
+      };
+
+      set({ user, isAuthenticated: true });
+      return true;
+    } catch (error) {
+      console.error('[CheckSession Error]', error);
+      set({ user: null, isAuthenticated: false });
+      return false;
+    }
+  },
+
+  changePassword: async (_userId, oldPassword, newPassword) => {
+    const { user } = get();
+    if (!user) return { success: false, error: 'Non autenticato' };
+
+    if (!useSupabase()) {
+      const passwords = db.get<Record<string, string>>(CONFIG.STORAGE_KEYS.USERS + '_pwd', {}) || {};
+      const storedHash = passwords[user.id];
+      
+      if (!storedHash) return { success: false, error: 'Utente non trovato' };
+
+      const { verifyPassword, hashPassword } = await import('@/lib/crypto');
+      const isValid = await verifyPassword(oldPassword, storedHash);
+      if (!isValid) return { success: false, error: 'Password attuale non corretta' };
+
+      passwords[user.id] = await hashPassword(newPassword);
+      db.set(CONFIG.STORAGE_KEYS.USERS + '_pwd', passwords);
+      return { success: true };
+    }
+
+    // Supabase: update password
+    const { error } = await supabaseClient.auth.updateUser({ password: newPassword });
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  },
+
+  resetPassword: async (userId, newPassword) => {
+    if (!useSupabase()) {
+      const passwords = db.get<Record<string, string>>(CONFIG.STORAGE_KEYS.USERS + '_pwd', {}) || {};
+      const { hashPassword } = await import('@/lib/crypto');
+      passwords[userId] = await hashPassword(newPassword);
+      db.set(CONFIG.STORAGE_KEYS.USERS + '_pwd', passwords);
+      return { success: true };
+    }
+
+    // Supabase: richiede service role key (solo server-side)
+    return { success: false, error: 'Funzione admin disponibile solo via API server' };
+  }
+}));
 
 // ============================================
 // USERS STORE
@@ -109,54 +335,51 @@ interface UsersState {
   users: User[];
   isLoaded: boolean;
   
-  loadUsers: () => void;
+  loadUsers: () => Promise<void>;
   addUser: (userData: Omit<User, 'id' | 'createdAt' | 'isActive'>, password: string) => Promise<{ success: boolean; error?: string; user?: User }>;
-  updateUser: (id: string, updates: Partial<User>) => void;
-  deleteUser: (id: string) => void;
+  updateUser: (id: string, updates: Partial<User>) => Promise<void>;
+  deleteUser: (id: string) => Promise<void>;
   getUserByUsername: (username: string) => User | undefined;
   getUserById: (id: string) => User | undefined;
   getUserByEmail: (email: string) => User | undefined;
-  activateUser: (id: string) => void;
-  deactivateUser: (id: string) => void;
 }
 
 export const useUsersStore = create<UsersState>()((set, get) => ({
   users: [],
   isLoaded: false,
 
-  loadUsers: () => {
+  loadUsers: async () => {
     if (!useSupabase()) {
       const users = db.get<User[]>(CONFIG.STORAGE_KEYS.USERS, []) || [];
       set({ users, isLoaded: true });
       return;
     }
 
-    supabaseClient
+    const { data, error } = await supabaseClient
       .from('users')
       .select('*')
       .eq('is_active', true)
-      .order('created_at', { ascending: false })
-      .then(({ data, error }: { data: any[], error: any }) => {
-        if (error) {
-          console.error('Error loading users:', error);
-          return;
-        }
+      .order('created_at', { ascending: false });
 
-        const users: User[] = (data || []).map((u: any) => ({
-          id: u.id,
-          username: u.username,
-          email: u.email,
-          nome: u.nome,
-          cognome: u.cognome,
-          ruolo: u.ruolo,
-          avatar: u.avatar || undefined,
-          createdAt: u.created_at,
-          lastLogin: u.last_login || undefined,
-          isActive: u.is_active
-        }));
+    if (error) {
+      console.error('Error loading users:', error);
+      return;
+    }
 
-        set({ users, isLoaded: true });
-      });
+    const users: User[] = (data || []).map((u: any) => ({
+      id: u.id,
+      username: u.username,
+      email: u.email,
+      nome: u.nome,
+      cognome: u.cognome,
+      ruolo: u.ruolo,
+      avatar: u.avatar || undefined,
+      createdAt: u.created_at,
+      lastLogin: u.last_login || undefined,
+      isActive: u.is_active
+    }));
+
+    set({ users, isLoaded: true });
   },
 
   addUser: async (userData, password) => {
@@ -171,7 +394,6 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
     }
 
     if (!useSupabase()) {
-      // Fallback localStorage
       const newUser: User = {
         ...userData,
         id: crypto.randomUUID(),
@@ -192,27 +414,34 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
       return { success: true, user: newUser };
     }
 
-    // Supabase mode - signup senza trigger
-    console.log('[Supabase] Attempting signup for:', userData.email);
-    
-    // 1. Crea utente in auth.users
+    // Supabase: signup
     const { data: authData, error: authError } = await supabaseClient.auth.signUp({
       email: userData.email,
       password: password
     });
 
-    console.log('[Supabase] Auth signup result:', { 
-      success: !!authData?.user, 
-      error: authError?.message,
-      userId: authData?.user?.id 
-    });
-
     if (authError || !authData.user) {
-      console.error('[Supabase] Signup failed:', authError);
       return { success: false, error: authError?.message || 'Errore creazione utente' };
     }
 
-    // 2. Crea utente in public.users MANUALMENTE (senza trigger)
+    // Crea profilo in public.users
+    const { error: profileError } = await supabaseClient
+      .from('users')
+      .insert({
+        id: authData.user.id,
+        username: userData.username,
+        email: userData.email,
+        nome: userData.nome,
+        cognome: userData.cognome,
+        ruolo: userData.ruolo || 'scrittore',
+        is_active: true,
+        created_at: new Date().toISOString()
+      });
+
+    if (profileError) {
+      console.error('Failed to create profile:', profileError);
+    }
+
     const newUser: User = {
       ...userData,
       id: authData.user.id,
@@ -220,31 +449,11 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
       isActive: true
     };
 
-    console.log('[Supabase] Inserting into public.users:', newUser);
-    
-    const { error: profileError } = await supabaseClient
-      .from('users')
-      .insert({
-        id: newUser.id,
-        username: userData.username,
-        email: userData.email,
-        nome: userData.nome,
-        cognome: userData.cognome,
-        ruolo: userData.ruolo || 'scrittore',
-        is_active: true,
-        created_at: newUser.createdAt
-      });
-
-    if (profileError) {
-      console.error('[Supabase] Failed to create profile:', profileError);
-      // Non blocchiamo, l'utente auth esiste già
-    }
-
     set({ users: [...users, newUser] });
     return { success: true, user: newUser };
   },
 
-  updateUser: (id, updates) => {
+  updateUser: async (id, updates) => {
     const { users } = get();
     const updatedUsers = users.map(u => u.id === id ? { ...u, ...updates } : u);
     
@@ -254,7 +463,7 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
       return;
     }
 
-    supabaseClient
+    const { error } = await supabaseClient
       .from('users')
       .update({
         username: updates.username,
@@ -266,14 +475,13 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
         is_active: updates.isActive,
         last_login: updates.lastLogin
       })
-      .eq('id', id)
-      .then(({ error }: { error: any }) => {
-        if (error) console.error('Error updating user:', error);
-        else set({ users: updatedUsers });
-      });
+      .eq('id', id);
+
+    if (error) console.error('Error updating user:', error);
+    else set({ users: updatedUsers });
   },
 
-  deleteUser: (id) => {
+  deleteUser: async (id) => {
     const { users } = get();
     const updatedUsers = users.filter(u => u.id !== id);
     
@@ -286,14 +494,13 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
       return;
     }
 
-    supabaseClient
+    const { error } = await supabaseClient
       .from('users')
       .update({ is_active: false })
-      .eq('id', id)
-      .then(({ error }: { error: any }) => {
-        if (error) console.error('Error deleting user:', error);
-        else set({ users: updatedUsers });
-      });
+      .eq('id', id);
+
+    if (error) console.error('Error deleting user:', error);
+    else set({ users: updatedUsers });
   },
 
   getUserByUsername: (username) => {
@@ -306,208 +513,6 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
 
   getUserByEmail: (email) => {
     return get().users.find(u => u.email.toLowerCase() === email.toLowerCase());
-  },
-
-  activateUser: (id) => {
-    get().updateUser(id, { isActive: true });
-  },
-
-  deactivateUser: (id) => {
-    get().updateUser(id, { isActive: false });
-  }
-}));
-
-// ============================================
-// AUTH STORE
-// ============================================
-interface AuthState {
-  user: User | null;
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  session: { userId: string; token: string; expiresAt: number } | null;
-  
-  login: (credentials: { username: string; password: string }) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
-  checkSession: () => boolean;
-  changePassword: (userId: string, oldPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
-  resetPassword: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
-}
-
-export const useAuthStore = create<AuthState>()((set, get) => ({
-  user: null,
-  isAuthenticated: false,
-  isLoading: false,
-  session: null,
-
-  login: async (credentials) => {
-    set({ isLoading: true });
-
-    const usersStore = useUsersStore.getState();
-    const user = usersStore.getUserByUsername(credentials.username);
-    
-    if (!user) {
-      set({ isLoading: false });
-      return { success: false, error: 'Utente non trovato' };
-    }
-
-    if (!user.isActive) {
-      set({ isLoading: false });
-      return { success: false, error: 'Account disattivato' };
-    }
-
-    if (!useSupabase()) {
-      // Fallback localStorage
-      const passwords = db.get<Record<string, string>>(CONFIG.STORAGE_KEYS.USERS + '_pwd', {}) || {};
-      const storedHash = passwords[user.id];
-      
-      if (!storedHash) {
-        set({ isLoading: false });
-        return { success: false, error: 'Password non impostata' };
-      }
-
-      const { verifyPassword } = await import('@/lib/crypto');
-      const isValid = await verifyPassword(credentials.password, storedHash);
-      
-      if (!isValid) {
-        set({ isLoading: false });
-        return { success: false, error: 'Password non corretta' };
-      }
-
-      usersStore.updateUser(user.id, { lastLogin: new Date().toISOString() });
-
-      const session = {
-        userId: user.id,
-        token: crypto.randomUUID(),
-        expiresAt: Date.now() + CONFIG.SECURITY.SESSION_TIMEOUT
-      };
-
-      db.set(CONFIG.STORAGE_KEYS.AUTH, session);
-      set({ user, isAuthenticated: true, session, isLoading: false });
-      return { success: true };
-    }
-
-    // Supabase mode
-    const { data, error } = await supabaseClient.auth.signInWithPassword({
-      email: user.email,
-      password: credentials.password
-    });
-
-    if (error || !data.user) {
-      set({ isLoading: false });
-      return { success: false, error: error?.message || 'Credenziali non valide' };
-    }
-
-    usersStore.updateUser(user.id, { lastLogin: new Date().toISOString() });
-
-    set({ 
-      user, 
-      isAuthenticated: true, 
-      session: {
-        userId: data.user.id,
-        token: data.session?.access_token || '',
-        expiresAt: Date.now() + (data.session?.expires_in || 3600) * 1000
-      },
-      isLoading: false 
-    });
-
-    return { success: true };
-  },
-
-  logout: () => {
-    if (useSupabase()) {
-      supabaseClient.auth.signOut();
-    } else {
-      db.remove(CONFIG.STORAGE_KEYS.AUTH);
-    }
-    set({ user: null, isAuthenticated: false, session: null });
-  },
-
-  checkSession: () => {
-    if (!useSupabase()) {
-      const session = db.get<{ userId: string; token: string; expiresAt: number }>(CONFIG.STORAGE_KEYS.AUTH, null);
-      
-      if (!session) return false;
-      if (Date.now() > session.expiresAt) {
-        get().logout();
-        return false;
-      }
-
-      const usersStore = useUsersStore.getState();
-      const user = usersStore.getUserById(session.userId);
-      
-      if (!user || !user.isActive) {
-        get().logout();
-        return false;
-      }
-
-      set({ user, isAuthenticated: true, session });
-      return true;
-    }
-
-    // Supabase - async check
-    supabaseClient.auth.getSession().then(({ data: { session } }: { data: { session: any } }) => {
-      if (!session) {
-        set({ user: null, isAuthenticated: false, session: null });
-        return false;
-      }
-      
-      const usersStore = useUsersStore.getState();
-      const user = usersStore.getUserById(session.user.id);
-      
-      if (!user || !user.isActive) {
-        set({ user: null, isAuthenticated: false, session: null });
-        return false;
-      }
-
-      set({ 
-        user, 
-        isAuthenticated: true, 
-        session: {
-          userId: session.user.id,
-          token: session.access_token,
-          expiresAt: Date.now() + session.expires_in * 1000
-        }
-      });
-    });
-
-    return get().isAuthenticated;
-  },
-
-  changePassword: async (_userId, oldPassword, newPassword) => {
-    if (!useSupabase()) {
-      const { user } = get();
-      if (!user) return { success: false, error: 'Non autenticato' };
-
-      const passwords = db.get<Record<string, string>>(CONFIG.STORAGE_KEYS.USERS + '_pwd', {}) || {};
-      const storedHash = passwords[user.id];
-      
-      if (!storedHash) return { success: false, error: 'Utente non trovato' };
-
-      const { verifyPassword, hashPassword } = await import('@/lib/crypto');
-      const isValid = await verifyPassword(oldPassword, storedHash);
-      if (!isValid) return { success: false, error: 'Password attuale non corretta' };
-
-      passwords[user.id] = await hashPassword(newPassword);
-      db.set(CONFIG.STORAGE_KEYS.USERS + '_pwd', passwords);
-      return { success: true };
-    }
-
-    const { error } = await supabaseClient.auth.updateUser({ password: newPassword });
-    if (error) return { success: false, error: error.message };
-    return { success: true };
-  },
-
-  resetPassword: async (userId, newPassword) => {
-    if (!useSupabase()) {
-      const passwords = db.get<Record<string, string>>(CONFIG.STORAGE_KEYS.USERS + '_pwd', {}) || {};
-      const { hashPassword } = await import('@/lib/crypto');
-      passwords[userId] = await hashPassword(newPassword);
-      db.set(CONFIG.STORAGE_KEYS.USERS + '_pwd', passwords);
-      return { success: true };
-    }
-
-    // Supabase admin reset requires service role key (server-side only)
-    return { success: false, error: 'Funzione admin disponibile solo via API server' };
   }
 }));
 
@@ -645,7 +650,6 @@ export const useArticlesStore = create<ArticlesState>()((set, get) => ({
           };
           updatedArticle.commentiVerifica = [...a.commentiVerifica, newCommento];
           
-          // Save comment to Supabase if in cloud mode
           if (useSupabase()) {
             supabaseClient.from('article_comments').insert({
               id: newCommento.id,
@@ -905,11 +909,7 @@ export const useTodoStore = create<TodoState>()((set, get) => ({
     const newCompletedState = !todo.completato;
     const updated = get().todos.map(t => 
       t.id === id 
-        ? { 
-            ...t, 
-            completato: newCompletedState,
-            completedAt: newCompletedState ? new Date().toISOString() : undefined
-          } 
+        ? { ...t, completato: newCompletedState, completedAt: newCompletedState ? new Date().toISOString() : undefined }
         : t
     );
     
@@ -932,17 +932,12 @@ export const useTodoStore = create<TodoState>()((set, get) => ({
       });
   },
 
-  getPendingTodos: () => {
-    return get().todos.filter(t => !t.completato);
-  },
-
-  getCompletedTodos: () => {
-    return get().todos.filter(t => t.completato);
-  }
+  getPendingTodos: () => get().todos.filter(t => !t.completato),
+  getCompletedTodos: () => get().todos.filter(t => t.completato)
 }));
 
 // ============================================
-// THEME STORE (localStorage only)
+// THEME STORE
 // ============================================
 interface ThemeState {
   isDarkMode: boolean;
@@ -952,13 +947,10 @@ interface ThemeState {
 
 export const useThemeStore = create<ThemeState>()((set) => ({
   isDarkMode: db.get<boolean>(CONFIG.STORAGE_KEYS.THEME, false) || false,
-  
   toggleTheme: () => set(state => {
-    const newValue = !state.isDarkMode;
-    db.set(CONFIG.STORAGE_KEYS.THEME, newValue);
-    return { isDarkMode: newValue };
+    db.set(CONFIG.STORAGE_KEYS.THEME, !state.isDarkMode);
+    return { isDarkMode: !state.isDarkMode };
   }),
-  
   setTheme: (isDark) => {
     db.set(CONFIG.STORAGE_KEYS.THEME, isDark);
     set({ isDarkMode: isDark });
@@ -966,7 +958,7 @@ export const useThemeStore = create<ThemeState>()((set) => ({
 }));
 
 // ============================================
-// UI STORE (memory only)
+// UI STORE
 // ============================================
 interface UIState {
   sidebarOpen: boolean;
@@ -984,7 +976,7 @@ export const useUIStore = create<UIState>()((set) => ({
   setCurrentView: (view) => set({ currentView: view })
 }));
 
-// Re-export for compatibility
+// Re-export
 export { useUsersStore as useSupabaseUsersStore };
 export { useAuthStore as useSupabaseAuthStore };
 export { useArticlesStore as useSupabaseArticlesStore };
