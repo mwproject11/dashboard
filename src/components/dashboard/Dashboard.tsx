@@ -58,7 +58,7 @@ export function Dashboard({ onViewChange }: DashboardProps) {
             </h1>
           </div>
           <p className="text-gray-600 dark:text-gray-400">
-            Benvenuto in MW_MGR, la piattaforma di MatteiWeekly
+            Benvenuto in MatteiWeekly Manager: La piattaforma di gestione del giornalino!
           </p>
           <div className="flex items-center gap-2 mt-1">
             <Sparkles className="w-4 h-4 text-purple-500" />
