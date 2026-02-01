@@ -9,7 +9,8 @@
 // Check if we're in a browser environment with import.meta.env
 const getEnv = (key: string): string => {
   try {
-    return (import.meta as any).env?.[key] || '';
+    // @ts-ignore - import.meta.env is provided by Vite
+    return import.meta.env?.[key] || '';
   } catch {
     return '';
   }

@@ -28,9 +28,18 @@ import type {
 let supabaseClient: any = null;
 let isSupabaseReady = false;
 
-// Check env vars
-const supabaseUrl = typeof import !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_URL ? (import.meta as any).env.VITE_SUPABASE_URL : '';
-const supabaseAnonKey = typeof import !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ? (import.meta as any).env.VITE_SUPABASE_ANON_KEY : '';
+// Check env vars - safely access import.meta.env
+const getEnvVar = (key: string): string => {
+  try {
+    // @ts-ignore - import.meta.env is provided by Vite
+    return import.meta.env?.[key] || '';
+  } catch {
+    return '';
+  }
+};
+
+const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
 const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey);
 
 // Initialize Supabase client if possible
