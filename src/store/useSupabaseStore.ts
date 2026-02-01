@@ -11,7 +11,6 @@
  */
 
 import { create } from 'zustand';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import db from '@/lib/database';
 import CONFIG from '@/config';
 import type { 
@@ -23,7 +22,42 @@ import type {
   CommentoVerifica,
   Notification
 } from '@/types';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+
+// ============================================
+// DYNAMIC SUPABASE IMPORT
+// Evita errori se @supabase/supabase-js non è installato
+// ============================================
+let supabase: any = null;
+let isSupabaseConfigured = (): boolean => false;
+
+try {
+  // Dynamic import per evitare errori di build se il pacchetto non è installato
+  const supabaseModule = require('@supabase/supabase-js');
+  
+  const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL || '';
+  const supabaseAnonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY || '';
+  
+  isSupabaseConfigured = (): boolean => Boolean(supabaseUrl && supabaseAnonKey);
+  
+  if (isSupabaseConfigured()) {
+    supabase = supabaseModule.createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+        storageKey: 'mw_mgr_supabase_auth',
+      },
+      realtime: {
+        params: {
+          eventsPerSecond: 10,
+        },
+      },
+    });
+  }
+} catch {
+  // Supabase non installato, usa solo localStorage
+  console.log('[@supabase/supabase-js not installed, using localStorage fallback]');
+}
 
 // ============================================
 // UTILITY PER FALLBACK localStorage
@@ -83,7 +117,18 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
       return;
     }
 
-    const users: User[] = data.map(u => ({
+    const users: User[] = (data || []).map((u: {
+      id: string;
+      username: string;
+      email: string;
+      nome: string;
+      cognome: string;
+      ruolo: 'admin' | 'verifica' | 'scrittore';
+      avatar: string | null;
+      created_at: string;
+      last_login: string | null;
+      is_active: boolean;
+    }) => ({
       id: u.id,
       username: u.username,
       email: u.email,
@@ -101,7 +146,7 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
 
   addUser: async (userData) => {
     if (!isBackendMode) {
-      // Fallback localStorage (usa vecchia implementazione)
+      // Fallback localStorage
       const { users } = get();
       
       if (users.find(u => u.username.toLowerCase() === userData.username.toLowerCase())) {
@@ -532,7 +577,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
 interface ArticlesState {
   articles: Article[];
   isLoading: boolean;
-  realtimeChannel: RealtimeChannel | null;
+  realtimeChannel: any | null;
   
   addArticle: (article: Omit<Article, 'id' | 'createdAt' | 'updatedAt' | 'commentiVerifica'>) => Promise<void>;
   updateArticle: (id: string, updates: Partial<Article>) => Promise<void>;
@@ -582,7 +627,21 @@ export const useArticlesStore = create<ArticlesState>()((set, get) => ({
       console.error('Error loading comments:', commentsError);
     }
 
-    const articles: Article[] = articlesData.map(a => ({
+    const articles: Article[] = (articlesData || []).map((a: {
+      id: string;
+      titolo: string;
+      sottotitolo: string | null;
+      contenuto: string;
+      autore_id: string;
+      autore_nome: string;
+      categoria: string;
+      tags: string[];
+      status: ArticleStatus;
+      immagine_copertina: string | null;
+      created_at: string;
+      updated_at: string;
+      published_at: string | null;
+    }) => ({
       id: a.id,
       titolo: a.titolo,
       sottotitolo: a.sottotitolo || undefined,
@@ -596,9 +655,25 @@ export const useArticlesStore = create<ArticlesState>()((set, get) => ({
       createdAt: a.created_at,
       updatedAt: a.updated_at,
       publishedAt: a.published_at || undefined,
-      commentiVerifica: (commentsData || [])
-        .filter(c => c.article_id === a.id)
-        .map(c => ({
+      commentiVerifica: ((commentsData || []) as Array<{
+        id: string;
+        article_id: string;
+        autore_id: string;
+        autore_nome: string;
+        autore_ruolo: 'admin' | 'verifica' | 'scrittore';
+        contenuto: string;
+        created_at: string;
+      }>)
+        .filter((c: { article_id: string }) => c.article_id === a.id)
+        .map((c: {
+          id: string;
+          article_id: string;
+          autore_id: string;
+          autore_nome: string;
+          autore_ruolo: 'admin' | 'verifica' | 'scrittore';
+          contenuto: string;
+          created_at: string;
+        }) => ({
           id: c.id,
           articoloId: c.article_id,
           autoreId: c.autore_id,
@@ -875,7 +950,7 @@ export const useArticlesStore = create<ArticlesState>()((set, get) => ({
 // ============================================
 interface ChatState {
   messages: ChatMessage[];
-  realtimeChannel: RealtimeChannel | null;
+  realtimeChannel: any | null;
   isLoading: boolean;
   
   addMessage: (content: string, user: User) => Promise<void>;
@@ -911,7 +986,15 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       return;
     }
 
-    const messages: ChatMessage[] = data.map(m => ({
+    const messages: ChatMessage[] = (data || []).map((m: {
+      id: string;
+      autore_id: string;
+      autore_nome: string;
+      autore_ruolo: 'admin' | 'verifica' | 'scrittore';
+      autore_avatar: string | null;
+      contenuto: string;
+      created_at: string;
+    }) => ({
       id: m.id,
       autoreId: m.autore_id,
       autoreNome: m.autore_nome,
@@ -981,13 +1064,23 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
-        (payload) => {
+        (payload: { 
+          new: { 
+            id: string;
+            autore_id: string;
+            autore_nome: string;
+            autore_ruolo: 'admin' | 'verifica' | 'scrittore';
+            autore_avatar: string | null;
+            contenuto: string;
+            created_at: string;
+          };
+        }) => {
           const newMessage: ChatMessage = {
             id: payload.new.id,
             autoreId: payload.new.autore_id,
             autoreNome: payload.new.autore_nome,
             autoreRuolo: payload.new.autore_ruolo,
-            autoreAvatar: payload.new.autore_avatar,
+            autoreAvatar: payload.new.autore_avatar || undefined,
             contenuto: payload.new.contenuto,
             createdAt: payload.new.created_at
           };
@@ -997,7 +1090,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       .on(
         'postgres_changes',
         { event: 'DELETE', schema: 'public', table: 'chat_messages' },
-        (payload) => {
+        (payload: { old: { id: string } }) => {
           set({ messages: get().messages.filter(m => m.id !== payload.old.id) });
         }
       )
@@ -1021,12 +1114,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 interface TodoState {
   todos: TodoItem[];
   isLoading: boolean;
-  realtimeChannel: RealtimeChannel | null;
+  realtimeChannel: any | null;
   
   addTodo: (todo: Omit<TodoItem, 'id' | 'createdAt' | 'completato' | 'completedAt' | 'createdBy' | 'createdByNome'>, user: User) => Promise<void>;
   updateTodo: (id: string, updates: Partial<TodoItem>) => Promise<void>;
   deleteTodo: (id: string) => Promise<void>;
-  toggleComplete: (id: string, user?: User) => Promise<void>;
+  toggleComplete: (id: string, _user?: User) => Promise<void>;
   getPendingTodos: () => TodoItem[];
   getCompletedTodos: () => TodoItem[];
   loadTodos: () => Promise<void>;
@@ -1059,7 +1152,19 @@ export const useTodoStore = create<TodoState>()((set, get) => ({
       return;
     }
 
-    const todos: TodoItem[] = data.map(t => ({
+    const todos: TodoItem[] = (data || []).map((t: {
+      id: string;
+      titolo: string;
+      descrizione: string | null;
+      assegnato_a: string | null;
+      assegnato_a_nome: string | null;
+      priorita: 'bassa' | 'media' | 'alta';
+      completato: boolean;
+      created_by: string;
+      created_by_nome: string;
+      created_at: string;
+      completed_at: string | null;
+    }) => ({
       id: t.id,
       titolo: t.titolo,
       descrizione: t.descrizione || undefined,
@@ -1155,7 +1260,7 @@ export const useTodoStore = create<TodoState>()((set, get) => ({
     }
   },
 
-  toggleComplete: async (id, user) => {
+  toggleComplete: async (id, _user) => {
     const todo = get().todos.find(t => t.id === id);
     if (!todo) return;
 
@@ -1229,7 +1334,7 @@ export const useTodoStore = create<TodoState>()((set, get) => ({
 interface NotificationsState {
   notifications: Notification[];
   isLoading: boolean;
-  realtimeChannel: RealtimeChannel | null;
+  realtimeChannel: any | null;
   
   loadNotifications: (userId: string) => Promise<void>;
   markAsRead: (id: string) => Promise<void>;
@@ -1268,7 +1373,18 @@ export const useNotificationsStore = create<NotificationsState>()((set, get) => 
       return;
     }
 
-    const notifications: Notification[] = data.map(n => ({
+    const notifications: Notification[] = (data || []).map((n: {
+      id: string;
+      user_id: string;
+      type: Notification['type'];
+      title: string;
+      message: string;
+      priority: Notification['priority'];
+      read: boolean;
+      read_at: string | null;
+      created_at: string;
+      data: Record<string, unknown> | null;
+    }) => ({
       id: n.id,
       userId: n.user_id,
       type: n.type,
@@ -1362,7 +1478,20 @@ export const useNotificationsStore = create<NotificationsState>()((set, get) => 
           table: 'notifications',
           filter: `user_id=eq.${userId}`
         },
-        (payload) => {
+        (payload: {
+          new: {
+            id: string;
+            user_id: string;
+            type: Notification['type'];
+            title: string;
+            message: string;
+            priority: Notification['priority'];
+            read: boolean;
+            read_at: string | null;
+            created_at: string;
+            data: Record<string, unknown> | null;
+          };
+        }) => {
           const newNotification: Notification = {
             id: payload.new.id,
             userId: payload.new.user_id,
@@ -1371,9 +1500,9 @@ export const useNotificationsStore = create<NotificationsState>()((set, get) => 
             message: payload.new.message,
             priority: payload.new.priority,
             read: payload.new.read,
-            readAt: payload.new.read_at,
+            readAt: payload.new.read_at || undefined,
             createdAt: payload.new.created_at,
-            data: payload.new.data
+            data: payload.new.data || undefined
           };
           set({ notifications: [newNotification, ...get().notifications] });
         }

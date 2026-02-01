@@ -3,7 +3,6 @@
  * Utile per debugging e per informare l'utente della modalità in uso
  */
 
-import { isSupabaseConfigured } from '@/lib/supabase';
 import { useAuthStore } from '@/store';
 import { Database, Wifi, WifiOff, AlertCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -13,6 +12,17 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+
+// Check if Supabase is configured
+const isSupabaseConfigured = (): boolean => {
+  try {
+    const url = import.meta.env?.VITE_SUPABASE_URL;
+    const key = import.meta.env?.VITE_SUPABASE_ANON_KEY;
+    return Boolean(url && key);
+  } catch {
+    return false;
+  }
+};
 
 export function SupabaseStatus() {
   const isConfigured = isSupabaseConfigured();
